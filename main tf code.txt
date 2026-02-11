@@ -1,0 +1,172 @@
+# --- PROVIDERS ---
+provider "aws" {
+  alias  = "east"
+  region = "us-east-1"
+}
+
+provider "aws" {
+  alias  = "west"
+  region = "us-west-2"
+}
+
+# --- NETWORK & SECURITY FOR EAST (Virginia) ---
+resource "aws_vpc" "east_vpc" {
+  provider   = aws.east
+  cidr_block = "10.0.0.0/16"
+}
+
+resource "aws_subnet" "east_subnet" {
+  provider                = aws.east
+  vpc_id                  = aws_vpc.east_vpc.id
+  cidr_block              = "10.0.1.0/24"
+  map_public_ip_on_launch = true
+}
+
+resource "aws_internet_gateway" "east_igw" {
+  provider = aws.east
+  vpc_id   = aws_vpc.east_vpc.id
+}
+
+resource "aws_route_table" "east_rt" {
+  provider = aws.east
+  vpc_id   = aws_vpc.east_vpc.id
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.east_igw.id
+  }
+}
+
+resource "aws_route_table_association" "east_assoc" {
+  provider       = aws.east
+  subnet_id      = aws_subnet.east_subnet.id
+  route_table_id = aws_route_table.east_rt.id
+}
+
+resource "aws_security_group" "east_sg" {
+  provider = aws.east
+  vpc_id   = aws_vpc.east_vpc.id
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+# --- NETWORK & SECURITY FOR WEST (Oregon) ---
+resource "aws_vpc" "west_vpc" {
+  provider   = aws.west
+  cidr_block = "10.1.0.0/16"
+}
+
+resource "aws_subnet" "west_subnet" {
+  provider                = aws.west
+  vpc_id                  = aws_vpc.west_vpc.id
+  cidr_block              = "10.1.1.0/24"
+  availability_zone       = "us-west-2a" # Fixed: Forces a zone with t2.micro support
+  map_public_ip_on_launch = true
+}
+
+resource "aws_internet_gateway" "west_igw" {
+  provider = aws.west
+  vpc_id   = aws_vpc.west_vpc.id
+}
+
+resource "aws_route_table" "west_rt" {
+  provider = aws.west
+  vpc_id   = aws_vpc.west_vpc.id
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.west_igw.id
+  }
+}
+
+resource "aws_route_table_association" "west_assoc" {
+  provider       = aws.west
+  subnet_id      = aws_subnet.west_subnet.id
+  route_table_id = aws_route_table.west_rt.id
+}
+
+resource "aws_security_group" "west_sg" {
+  provider = aws.west
+  vpc_id   = aws_vpc.west_vpc.id
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+# --- AMIs ---
+data "aws_ami" "amazon_linux_east" {
+  provider    = aws.east
+  most_recent = true
+  owners      = ["amazon"]
+  filter {
+    name   = "name"
+    values = ["amzn2-ami-hvm-*-x86_64-gp2"]
+  }
+}
+
+data "aws_ami" "amazon_linux_west" {
+  provider    = aws.west
+  most_recent = true
+  owners      = ["amazon"]
+  filter {
+    name   = "name"
+    values = ["amzn2-ami-hvm-*-x86_64-gp2"]
+  }
+}
+
+# --- EC2 INSTANCES ---
+resource "aws_instance" "nginx_east" {
+  provider               = aws.east
+  ami                    = data.aws_ami.amazon_linux_east.id
+  instance_type          = "t2.micro"
+  subnet_id              = aws_subnet.east_subnet.id
+  vpc_security_group_ids = [aws_security_group.east_sg.id]
+  user_data              = <<-EOF
+                  #!/bin/bash
+                  sudo yum update -y
+                  sudo amazon-linux-extras install nginx1 -y
+                  sudo systemctl start nginx
+                  EOF
+  tags = { Name = "Nginx-East" }
+}
+
+resource "aws_instance" "nginx_west" {
+  provider               = aws.west
+  ami                    = data.aws_ami.amazon_linux_west.id
+  instance_type          = "t2.micro"
+  subnet_id              = aws_subnet.west_subnet.id
+  vpc_security_group_ids = [aws_security_group.west_sg.id]
+  user_data              = <<-EOF
+                  #!/bin/bash
+                  sudo yum update -y
+                  sudo amazon-linux-extras install nginx1 -y
+                  sudo systemctl start nginx
+                  EOF
+  tags = { Name = "Nginx-West" }
+}
+
+# --- OUTPUTS ---
+output "East_Public_IP" {
+  value = aws_instance.nginx_east.public_ip
+}
+
+output "West_Public_IP" {
+  value = aws_instance.nginx_west.public_ip
+}
